@@ -1,0 +1,156 @@
+"""Implementation for SNN with Surrogate Gradient learning"""
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+from v2.backbone.model import (
+    VGG16Backbone, SimpleConvBackbone, ResNetBackbone, FusionBackbone,
+    ViTBackbone, EfficientNetBackbone, MobileNetBackbone
+)
+
+class SuperSpike(torch.autograd.Function):
+    """
+    Spiking nonlinearity with surrogate gradient (SuperSpike).
+    """
+    scale = 100.0
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        out = torch.zeros_like(input)
+        out[input > 0] = 1.0
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        grad_input = grad_output.clone()
+        grad = grad_input / (SuperSpike.scale * torch.abs(input) + 1.0) ** 2
+        return grad
+
+class SQNSurrogate(nn.Module):
+    def __init__(self, input_dim=(3, 224, 224), output_dim=9, history_dim=90, 
+                 simulation_time=10, alpha=0.9, beta=0.8, threshold=1.0, extractor_name='conv', dueling=False):
+        super(SQNSurrogate, self).__init__()
+        
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.history_dim = history_dim
+        self.simulation_time = simulation_time
+        self.extractor_name = extractor_name
+        self.dueling = dueling
+
+        self.alpha = alpha
+        self.beta = beta
+        self.threshold = threshold
+        self.spike_fn = SuperSpike.apply
+
+        # 1. Khởi tạo Backbone
+        if self.extractor_name == 'vgg16':
+            self.backbone = VGG16Backbone()
+        elif self.extractor_name == 'resnet18':
+            self.backbone = ResNetBackbone(model_name='resnet18')
+        elif self.extractor_name == 'fusion':
+            self.backbone = FusionBackbone(model_name='resnet18')
+        elif self.extractor_name == 'vit':
+            self.backbone = ViTBackbone(model_name='vit_b_16')
+        elif self.extractor_name == 'efficientnet':
+            self.backbone = EfficientNetBackbone(model_name='efficientnet_b0')
+        elif self.extractor_name == 'mobilenet':
+            self.backbone = MobileNetBackbone(model_name='mobilenet_v3_small')
+        else:
+            self.backbone = SimpleConvBackbone(input_channels=self.input_dim[0])
+            
+        self.fc_input_dim = self.backbone.get_output_dim() + self.history_dim
+
+        # 2. Xác định Final Layer cho FC3
+        if self.dueling:
+            from v2.backbone.engine import DuelingHead
+            final_layer = DuelingHead(64, 32, self.output_dim)
+        else:
+            final_layer = nn.Linear(64, self.output_dim)
+
+        # 3. Khởi tạo FC Layers (Chia làm 3 khối cho vòng lặp Surrogate)
+        self.fc1 = nn.Sequential(
+            nn.Linear(self.fc_input_dim, 5096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2),
+            nn.Linear(5096, 2048),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2)
+        )
+        
+        self.fc2 = nn.Sequential(
+            nn.Linear(2048, 1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2),
+            nn.Linear(1024, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2)
+        )
+        
+        self.fc3 = nn.Sequential(
+            nn.Linear(512, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+            final_layer
+        )
+
+    def extract_features(self, state):
+        """Extracts CNN features, bypassing SNN and FC layers."""
+        with torch.no_grad():
+            return self.backbone(state)
+
+    def forward(self, state, history):
+        batch_size = state.size(0)
+        device = state.device
+
+        # 1. Feature Extraction
+        if state.dim() == 2:
+            features = state
+        else:
+            features = self.backbone(state)
+            
+        x_fc_base = torch.cat([features, history], dim=1)
+
+        pot_sum = torch.zeros(batch_size, self.output_dim, device=device)
+
+        # 2. Spiking Temporal Loop
+        mem1 = torch.zeros(batch_size, 2048, device=device)
+        mem2 = torch.zeros(batch_size, 512, device=device)
+        mem3 = torch.zeros(batch_size, self.output_dim, device=device)
+        
+        syn1 = torch.zeros_like(mem1)
+        syn2 = torch.zeros_like(mem2)
+        syn3 = torch.zeros_like(mem3)
+
+        for _ in range(self.simulation_time):
+            # FC1
+            h1 = self.fc1(x_fc_base)
+            spk1, mem1, syn1 = self._spiking_neuron(h1, mem1, syn1)
+            
+            # FC2
+            h2 = self.fc2(spk1)
+            spk2, mem2, syn2 = self._spiking_neuron(h2, mem2, syn2)
+            
+            # FC3 (Accumulate potential, no spikes needed at output)
+            h3 = self.fc3(spk2)
+            syn3 = self.alpha * syn3 + h3
+            mem3 = self.beta * mem3 + syn3
+            
+            pot_sum += mem3
+
+        # Q-values are the average potentials
+        return pot_sum / self.simulation_time
+
+    def _spiking_neuron(self, h, mem, syn):
+        new_syn = self.alpha * syn + h
+        new_mem = self.beta * mem + new_syn
+        
+        mthr = new_mem - self.threshold
+        out = self.spike_fn(mthr)
+        
+        # Soft reset
+        res_mem = new_mem - (out * self.threshold)
+        return out, res_mem, new_syn
