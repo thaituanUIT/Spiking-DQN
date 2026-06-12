@@ -41,6 +41,7 @@ class Agent:
         device="cpu",
         extractor_name="vgg16",
         use_cache=True,
+        replay_device="auto",
     ):
         del load  # Legacy flag kept for CLI compatibility.
 
@@ -55,6 +56,7 @@ class Agent:
         self.gamma = 0.9
         self.epsilon = 1.0
         self.device = torch.device(device)
+        self.replay_device = self._resolve_replay_device(replay_device)
         self.use_cache = use_cache
         self.save_path = f"./models/q_network_{extractor_name}_{self.classe}.pth"
 
@@ -71,6 +73,19 @@ class Agent:
 
         self.last_next_state = None
         self.last_mask = None
+        self._cached_image_token = None
+        self._feature_cache = {}
+
+    def _resolve_replay_device(self, replay_device):
+        if replay_device == "auto":
+            if self.device.type == "cuda":
+                return torch.device("cpu")
+            return self.device
+
+        resolved = torch.device(replay_device)
+        if resolved.type == "cuda" and not torch.cuda.is_available():
+            raise ValueError("replay_device='cuda' requested but CUDA is not available.")
+        return resolved
 
     def save_network(self):
         torch.save(self.model.state_dict(), self.save_path)
@@ -106,6 +121,7 @@ class Agent:
 
     def step(self, image, history, current_mask, ground_truth, step_count, epsilon):
         self.epsilon = epsilon
+        self._prepare_feature_cache(image)
 
         state = self._state_from_observation(image, history, current_mask)
         if step_count >= self.max_steps:
@@ -143,7 +159,7 @@ class Agent:
         elif self.use_cache and self.last_next_state is not None and np.array_equal(current_mask, self.last_mask):
             image_tensor = self.last_next_state.clone()
         else:
-            image_tensor = self._extract_features(image, current_mask)
+            image_tensor = self._get_cached_features(image, current_mask)
 
         return image_tensor, history_tensor
 
@@ -225,7 +241,7 @@ class Agent:
         if random.random() > self.epsilon:
             self.model.eval()
             with torch.no_grad():
-                q_values = self.model(state["image"].to(self.device), state["history"].to(self.device))
+                q_values = self.model(state["image"], state["history"])
             self.model.train()
             return int(torch.argmax(q_values, dim=1).item())
 
@@ -247,7 +263,8 @@ class Agent:
         return random.choice(negative_actions or list(range(self.n_actions)))
 
     def _state_from_observation(self, image, history, current_mask):
-        image_features = self._extract_features(image, current_mask)
+        self._prepare_feature_cache(image)
+        image_features = self._get_cached_features(image, current_mask)
         history_features = self._encode_history(history)
 
         if self.use_cache:
@@ -266,11 +283,32 @@ class Agent:
         image_tensor = image_tensor.to(self.device) / 255.0
 
         with torch.no_grad():
-            features = self.feature_extractor(image_tensor).detach().cpu()
+            features = self.feature_extractor(image_tensor).detach().to(self.replay_device)
         return features
 
+    def _prepare_feature_cache(self, image):
+        if not self.use_cache:
+            return
+
+        image_token = (id(image), image.shape)
+        if image_token != self._cached_image_token:
+            self._cached_image_token = image_token
+            self._feature_cache = {}
+            self.last_next_state = None
+            self.last_mask = None
+
+    def _get_cached_features(self, image, current_mask):
+        cache_key = tuple(np.asarray(current_mask).astype(np.int32).tolist())
+        if self.use_cache and cache_key in self._feature_cache:
+            return self._feature_cache[cache_key].clone()
+
+        features = self._extract_features(image, current_mask)
+        if self.use_cache:
+            self._feature_cache[cache_key] = features
+        return features.clone()
+
     def _encode_history(self, history):
-        history_tensor = torch.zeros((1, self.history_size * self.n_actions), dtype=torch.float32)
+        history_tensor = torch.zeros((1, self.history_size * self.n_actions), dtype=torch.float32, device=self.replay_device)
         valid_history = [action for action in history if action != -1][-self.history_size :]
         for idx, action in enumerate(valid_history):
             history_tensor[0, idx * self.n_actions + action] = 1.0
@@ -278,8 +316,8 @@ class Agent:
 
     def _empty_next_state(self):
         return {
-            "image": torch.zeros((1, self.feature_extractor.output_dim), dtype=torch.float32),
-            "history": torch.zeros((1, self.history_size * self.n_actions), dtype=torch.float32),
+            "image": torch.zeros((1, self.feature_extractor.output_dim), dtype=torch.float32, device=self.replay_device),
+            "history": torch.zeros((1, self.history_size * self.n_actions), dtype=torch.float32, device=self.replay_device),
         }
 
     def _sample_batch(self, batch_size):

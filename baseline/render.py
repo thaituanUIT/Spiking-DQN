@@ -29,6 +29,7 @@ def main():
     agent_group.add_argument('--alpha', type=float, default=0.1, help="Mask transformation rate")
     agent_group.add_argument('--nu', type=float, default=3.0, help="Trigger reward weight")
     agent_group.add_argument('--threshold', type=float, default=0.5, help="IoU threshold for trigger reward")
+    agent_group.add_argument('--replay-device', type=str, choices=['auto', 'cpu', 'cuda'], default='auto', help="Where replay/cache tensors live")
     
     # System Parameters
     sys_group = parser.add_argument_group('System Parameters')
@@ -67,7 +68,8 @@ def main():
         threshold=args.threshold,
         max_steps=args.max_steps,
         device=device,
-        extractor_name=args.extractor
+        extractor_name=args.extractor,
+        replay_device=args.replay_device,
     )
     
     # Load weights

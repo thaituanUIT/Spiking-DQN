@@ -30,7 +30,8 @@ def main():
     rl_group.add_argument('--nu', type=float, default=3.0, help="Trigger reward weight")
     rl_group.add_argument('--threshold', type=float, default=0.5, help="IoU threshold for trigger reward")
     rl_group.add_argument('--target-update', type=int, default=1, help="Epochs between target network updates")
-    rl_group.add_argument('--use-cache', action='store_true', default=True, help="Use feature caching during training")
+    rl_group.add_argument('--use-cache', action=argparse.BooleanOptionalAction, default=True, help="Use feature caching during training")
+    rl_group.add_argument('--replay-device', type=str, choices=['auto', 'cpu', 'cuda'], default='auto', help="Where replay/cache tensors live")
     
     # Optimizer/Training Parameters
     train_group = parser.add_argument_group('Training/Optimizer Parameters')
@@ -73,7 +74,8 @@ def main():
         max_steps=args.max_steps,
         device=device,
         extractor_name=args.extractor,
-        use_cache=args.use_cache
+        use_cache=args.use_cache,
+        replay_device=args.replay_device,
     )
     
     os.makedirs('baseline/weights', exist_ok=True)

@@ -28,6 +28,7 @@ def main():
     agent_group = parser.add_argument_group('Agent Parameters')
     agent_group.add_argument('--replay', type=int, default=10, help="History size (history_size)")
     agent_group.add_argument('--max-steps', type=int, default=20, help="Max steps per image")
+    agent_group.add_argument('--replay-device', type=str, choices=['auto', 'cpu', 'cuda'], default='auto', help="Where replay/cache tensors live")
     
     # SNN Parameters
     snn_group = parser.add_argument_group('SNN Parameters')
@@ -84,7 +85,7 @@ def main():
         print(f"{status}: Weights not found at {weight_path}. Cannot render without trained weights.")
         return
         
-    agent = LocalizationAgent(model=model, device=device, history_size=args.replay, max_steps=args.max_steps)
+    agent = LocalizationAgent(model=model, device=device, history_size=args.replay, max_steps=args.max_steps, replay_device=args.replay_device)
     render_predictions(agent, samples, save_dir=args.save_dir)
 
 

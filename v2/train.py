@@ -34,6 +34,7 @@ def main():
     rl_group.add_argument('--nu', type=float, default=3.0, help="Trigger reward weight")
     rl_group.add_argument('--threshold', type=float, default=0.5, help="IoU threshold for trigger reward")
     rl_group.add_argument('--replay', type=int, default=10, help="History size (history_size)")
+    rl_group.add_argument('--replay-device', type=str, choices=['auto', 'cpu', 'cuda'], default='auto', help="Where replay/cache tensors live")
     rl_group.add_argument('--target-update', type=int, default=1, help="Epochs between target network updates")
     rl_group.add_argument('--loss-fn', type=str, choices=['mse', 'huber', 'smooth_l1'], default='huber', help="Loss function for RL")
     rl_group.add_argument('--use-cache', action=argparse.BooleanOptionalAction, default=True, help="Use feature caching during training")
@@ -128,7 +129,8 @@ def main():
         max_steps=args.max_steps,
         alpha=args.alpha,
         history_size=args.replay,
-        use_cache=args.use_cache
+        use_cache=args.use_cache,
+        replay_device=args.replay_device,
     )
     
     # 6. Train RL

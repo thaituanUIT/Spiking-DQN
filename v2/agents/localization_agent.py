@@ -13,9 +13,7 @@ class ReplayBuffer:
         self.buffer.append((state, action, next_state, reward, done))
 
     def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        state, action, next_state, reward, done = map(np.stack, zip(*batch))
-        return state, action, next_state, reward, done
+        return random.sample(self.buffer, batch_size)
 
     def __len__(self):
         return len(self.buffer)
@@ -23,10 +21,12 @@ class ReplayBuffer:
 class LocalizationAgent:
     def __init__(self, model, engine=None, optimizer=None, loss_fn='huber', device='cpu', 
                  gamma=0.9, max_steps=20, action_options=9, history_size=10,
-                 clip_grad=1.0, alpha=0.1, nu=3.0, threshold=0.5, use_cache=True):
+                 clip_grad=1.0, alpha=0.1, nu=3.0, threshold=0.5, use_cache=True,
+                 replay_device='auto'):
         self.model = model.to(device)
         self.optimizer = optimizer
-        self.device = device
+        self.device = torch.device(device)
+        self.replay_device = self._resolve_replay_device(replay_device)
         
         self.gamma = gamma
         self.max_steps = max_steps
@@ -37,6 +37,8 @@ class LocalizationAgent:
         self.use_cache = use_cache
         self.last_next_state = None
         self.last_mask = None
+        self._cached_image_token = None
+        self._feature_cache = {}
         
         # Giữ nguyên sức chứa memory của branch bạn
         self.memory = ReplayBuffer(capacity=10000)
@@ -61,6 +63,17 @@ class LocalizationAgent:
         else:
             self.engine = engine
             self.engine.gamma = self.gamma
+
+    def _resolve_replay_device(self, replay_device):
+        if replay_device == 'auto':
+            if self.device.type == 'cuda':
+                return torch.device('cpu')
+            return self.device
+
+        resolved = torch.device(replay_device)
+        if resolved.type == 'cuda' and not torch.cuda.is_available():
+            raise ValueError("replay_device='cuda' requested but CUDA is not available.")
+        return resolved
             
     def update_target_network(self):
         """Delegates target network update to the engine."""
@@ -74,7 +87,7 @@ class LocalizationAgent:
         if random.random() > epsilon:
             self.model.eval()
             with torch.no_grad():
-                q_values = self.model(image_tensor.to(self.device), history_tensor.to(self.device))
+                q_values = self.model(image_tensor, history_tensor)
             self.model.train()
             action = torch.argmax(q_values).item()
         else:
@@ -171,19 +184,7 @@ class LocalizationAgent:
     def feature_extract(self, img, history, width, height, current_mask, skip_image=False):
         """Converts mask to cropped image tensor and history list to tensor"""
         if not skip_image:
-            cropped_img = crop_and_resize(img, current_mask)
-            img_transposed = np.transpose(cropped_img, (2, 0, 1)) 
-            
-            # SNN models might expect batches, so we add batch dim
-            image_tensor = torch.from_numpy(img_transposed).unsqueeze(0).float().to(self.device) / 255.0
-            
-            # Pre-compute CNN features to save memory and training time
-            was_training = self.model.training
-            self.model.eval()
-            with torch.no_grad():
-                feature_tensor = self.model.extract_features(image_tensor).cpu()
-            if was_training:
-                self.model.train()
+            feature_tensor = self._get_cached_features(img, current_mask)
         else:
             feature_tensor = None
             
@@ -191,12 +192,13 @@ class LocalizationAgent:
         for i, act in enumerate(history):
             if act != -1:
                 feat_hist[i * self.action_options + act] = 1
-        history_tensor = torch.tensor(feat_hist).float().unsqueeze(0)
+        history_tensor = torch.tensor(feat_hist, dtype=torch.float32, device=self.replay_device).unsqueeze(0)
         
         return feature_tensor, history_tensor
 
     def step(self, image, history, current_mask, ground_truth, step_count, epsilon):
         height, width, _ = image.shape
+        self._prepare_feature_cache(image)
         
         # --- LOGIC TÁI SỬ DỤNG CACHE ---
         if self.use_cache and self.last_next_state is not None and np.array_equal(current_mask, self.last_mask):
@@ -226,32 +228,79 @@ class LocalizationAgent:
         
         # --- CẬP NHẬT CACHE ---
         if self.use_cache:
-            self.last_next_state = next_image_tensor
+            self.last_next_state = next_image_tensor.clone()
             self.last_mask = new_mask
         
-        # Store transition in numpy for simplicity in replay buffer
-        state = {'image': image_tensor.numpy()[0], 'history': history_tensor.numpy()[0]}
-        next_state = {'image': next_image_tensor.numpy()[0], 'history': next_history_tensor.numpy()[0]}
+        state = self._pack_replay_state(image_tensor, history_tensor)
+        next_state = self._pack_replay_state(next_image_tensor, next_history_tensor)
         
         self.memory.push(state, action, next_state, reward, done)
         
         return new_mask, reward, done, history
 
+    def _prepare_feature_cache(self, image):
+        if not self.use_cache:
+            return
+
+        image_token = (id(image), image.shape)
+        if image_token != self._cached_image_token:
+            self._cached_image_token = image_token
+            self._feature_cache = {}
+            self.last_next_state = None
+            self.last_mask = None
+
+    def _get_cached_features(self, image, current_mask):
+        self._prepare_feature_cache(image)
+
+        cache_key = tuple(np.asarray(current_mask).astype(np.int32).tolist())
+        if self.use_cache and cache_key in self._feature_cache:
+            return self._feature_cache[cache_key].clone()
+
+        cropped_img = crop_and_resize(image, current_mask)
+        img_transposed = np.transpose(cropped_img, (2, 0, 1))
+
+        image_tensor = torch.from_numpy(img_transposed).unsqueeze(0).float().to(self.device) / 255.0
+
+        was_training = self.model.training
+        self.model.eval()
+        with torch.no_grad():
+            feature_tensor = self.model.extract_features(image_tensor).detach().to(self.replay_device)
+        if was_training:
+            self.model.train()
+
+        if self.use_cache:
+            self._feature_cache[cache_key] = feature_tensor
+        return feature_tensor.clone()
+
+    def _pack_replay_state(self, image_tensor, history_tensor):
+        return {
+            'image': self._to_replay_tensor(image_tensor),
+            'history': self._to_replay_tensor(history_tensor),
+        }
+
+    def _to_replay_tensor(self, tensor):
+        return tensor.detach().to(self.replay_device, copy=True).contiguous()
+
     def train_step(self, batch_size=20):
         if len(self.memory) < batch_size or not self.optimizer:
             return 0.0
 
-        states, actions, next_states, rewards, dones = self.memory.sample(batch_size)
-        
-        img_states = torch.FloatTensor(np.stack([s['image'] for s in states])).to(self.device)
-        hist_states = torch.FloatTensor(np.stack([s['history'] for s in states])).to(self.device)
-        
-        img_next = torch.FloatTensor(np.stack([s['image'] for s in next_states])).to(self.device)
-        hist_next = torch.FloatTensor(np.stack([s['history'] for s in next_states])).to(self.device)
-        
-        actions = torch.LongTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).to(self.device)
-        dones = torch.FloatTensor(dones).to(self.device)
+        transitions = self.memory.sample(batch_size)
+        states = [transition[0] for transition in transitions]
+        actions = [transition[1] for transition in transitions]
+        next_states = [transition[2] for transition in transitions]
+        rewards = [transition[3] for transition in transitions]
+        dones = [transition[4] for transition in transitions]
+
+        img_states = torch.cat([s['image'] for s in states]).to(self.device)
+        hist_states = torch.cat([s['history'] for s in states]).to(self.device)
+
+        img_next = torch.cat([s['image'] for s in next_states]).to(self.device)
+        hist_next = torch.cat([s['history'] for s in next_states]).to(self.device)
+
+        actions = torch.tensor(actions, dtype=torch.long, device=self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)
+        dones = torch.tensor(dones, dtype=torch.float32, device=self.device)
         
         self.optimizer.zero_grad()
         

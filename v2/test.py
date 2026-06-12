@@ -24,6 +24,7 @@ def main():
     agent_group = parser.add_argument_group('Agent Parameters')
     agent_group.add_argument('--replay', type=int, default=10, help="History size (history_size)")
     agent_group.add_argument('--max-steps', type=int, default=20, help="Max steps per image")
+    agent_group.add_argument('--replay-device', type=str, choices=['auto', 'cpu', 'cuda'], default='auto', help="Where replay/cache tensors live")
     
     # SNN Parameters
     snn_group = parser.add_argument_group('SNN Parameters')
@@ -60,7 +61,7 @@ def main():
         print(f"Warning: Weights not found at {weight_path}. Evaluating with random weights.")
         
     # Agent wrapper (optimizer not needed for eval)
-    agent = LocalizationAgent(model=model, device=device, history_size=args.replay, max_steps=args.max_steps)
+    agent = LocalizationAgent(model=model, device=device, history_size=args.replay, max_steps=args.max_steps, replay_device=args.replay_device)
     
     csv_file = f"test_{args.method}_{args.target}_{args.extractor}.csv"
     log_dir = args.logging_dir if args.logging_dir else "logs"
