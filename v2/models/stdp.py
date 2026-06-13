@@ -319,6 +319,10 @@ class SQNSTDP(nn.Module):
         return self._compute_conv_output_dim(x)
 
     def forward(self, state, history):
+        device = next(self.parameters()).device
+        state = state.to(device)
+        history = history.to(device)
+
         # 1. DoG Filtering
         with torch.no_grad():
             x = self.dog(state)

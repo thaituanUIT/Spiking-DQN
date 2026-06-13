@@ -74,12 +74,19 @@ class SQNConverted(nn.Module):
             final_layer
         )
 
+    def _module_device(self):
+        return next(self.parameters()).device
+
     def extract_features(self, state):
         """Extracts CNN features, bypassing SNN and FC layers."""
         with torch.no_grad():
             return self.backbone(state)
 
     def forward(self, state, history):
+        device = self._module_device()
+        state = state.to(device)
+        history = history.to(device)
+
         if not self.is_snn:
             # Standard ANN Forward pass
             if state.dim() == 2:
@@ -93,7 +100,6 @@ class SQNConverted(nn.Module):
         else:
             # SNN Forward pass (Integrate and Fire simulation)
             state_size = state.size(0)
-            device = state.device
             
             out_v = torch.zeros(state_size, self.output_dim, device=device)
             

@@ -97,14 +97,19 @@ class SQNSurrogate(nn.Module):
             final_layer
         )
 
+    def _module_device(self):
+        return next(self.parameters()).device
+
     def extract_features(self, state):
         """Extracts CNN features, bypassing SNN and FC layers."""
         with torch.no_grad():
             return self.backbone(state)
 
     def forward(self, state, history):
+        device = self._module_device()
+        state = state.to(device)
+        history = history.to(device)
         batch_size = state.size(0)
-        device = state.device
 
         # 1. Feature Extraction
         if state.dim() == 2:
