@@ -4,7 +4,7 @@ import os
 import cv2
 import torch
 
-from v2.data.voc_tfds import TFDSVOC2007TestDataset
+from v2.data.factory import build_eval_dataset, get_default_weight_path
 from v2.agents.localization_agent import LocalizationAgent
 from v2.models.surrogate import SQNSurrogate
 from v2.models.ats import SQNConverted
@@ -21,6 +21,7 @@ def main():
     core_group.add_argument('--method', type=str, choices=['surrogate', 'ats', 'stdp'], required=True, help="SNN method to render: surrogate or ats")
     core_group.add_argument('--extractor', type=str, choices=['conv', 'vgg16', 'resnet18', 'fusion', 'vit', 'efficientnet', 'mobilenet'], default='conv', help="Feature extractor backbone")
     core_group.add_argument('--target', type=str, default='mixing')
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to render from when --image-path is not provided")
     core_group.add_argument('--image-path', type=str, default=None, help="Path to specific image file")
     core_group.add_argument('--num-images', type=int, default=5, help="Number of images if no path provided")
     
@@ -59,7 +60,11 @@ def main():
             'filename': os.path.basename(args.image_path)
         }]
     else:
-        dataset = TFDSVOC2007TestDataset(target_class=args.target, num_samples=args.num_images)
+        dataset = build_eval_dataset(
+            dataset_name=args.dataset,
+            target_class=args.target,
+            num_samples=args.num_images,
+        )
         samples = [dataset[i] for i in range(len(dataset))]
     
     history_dim = 9 * args.replay
@@ -76,7 +81,7 @@ def main():
         
     model = model.to(device)
     
-    weight_path = args.weights if args.weights else f"weights/{args.method}_{args.target}.pth"
+    weight_path = args.weights if args.weights else get_default_weight_path(args.method, args.dataset, args.target, "weights")
     if os.path.exists(weight_path):
         model.load_state_dict(torch.load(weight_path, map_location=device))
         print(f"Loaded weights from {weight_path}")

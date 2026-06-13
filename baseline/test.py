@@ -6,9 +6,9 @@ import sys
 # Ensure imports work by adding the root directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from v2.data.voc_tfds import TFDSVOC2007TestDataset
 from baseline.utils.agent import Agent
 from v2.helpers.tester import test_model
+from v2.data.factory import build_eval_dataset, get_default_weight_path
 
 def main():
     parser = argparse.ArgumentParser(description="Baseline Agent Testing with v2 Interface")
@@ -17,6 +17,7 @@ def main():
     core_group = parser.add_argument_group('Core Parameters')
     core_group.add_argument('--target', type=str, default='mixing', help="Target class or 'mixing' for all")
     core_group.add_argument('--extractor', type=str, choices=['vgg16', 'resnet18', 'vit', 'efficientnet', 'mobilenet'], default='vgg16', help="Feature extractor backbone")
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to evaluate")
     core_group.add_argument('--num-samples', type=int, default=10, help="Test on 10 samples by default")
     
     # Agent Parameters
@@ -38,7 +39,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    dataset = TFDSVOC2007TestDataset(target_class=args.target, num_samples=args.num_samples)
+    dataset = build_eval_dataset(
+        dataset_name=args.dataset,
+        target_class=args.target,
+        num_samples=args.num_samples,
+    )
     
     agent = Agent(
         classe=args.target,
@@ -52,7 +57,8 @@ def main():
     )
     
     # Load weights
-    weight_path = args.weights if args.weights else f"baseline/weights/baseline_{args.extractor}_{args.target}.pth"
+    weight_prefix = f"baseline_{args.extractor}"
+    weight_path = args.weights if args.weights else get_default_weight_path(weight_prefix, args.dataset, args.target, "baseline/weights")
     if os.path.exists(weight_path):
         agent.model.load_state_dict(torch.load(weight_path, map_location=device))
         print(f"Loaded weights from {weight_path}")
@@ -64,7 +70,7 @@ def main():
         
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    detailed_name = f"test_baseline_{args.extractor}_{args.target}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}_{timestamp}.csv"
+    detailed_name = f"test_baseline_{args.extractor}_{args.dataset}_{args.target}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}_{timestamp}.csv"
     log_dir = args.logging_dir if args.logging_dir else ("logs" if args.logging else None)
     test_model(agent, dataset, log_dir=log_dir, output_file=detailed_name)
 

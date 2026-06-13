@@ -20,21 +20,34 @@ Deprecated branches `v1/` and `v3/` are no longer part of the active workflow.
 
 ## Dataset
 
-This project uses `torchvision` to load the **PASCAL VOC 2012** dataset. `torchvision` requires a very specific folder structure to detect existing files and avoid re-downloading them. 
+The CLI now supports two datasets through a single flag:
 
-**Download the dataset here**: [PASCAL VOC 2012 (Google Drive)](https://drive.google.com/drive/folders/1ikKFR2nbdLw-W6cazaVYyYXCNUeXW6E7?usp=sharing)
+- `--dataset voc`
+- `--dataset tiny-imagenet`
 
-Ensure your root structure looks exactly like this:
-```
+All dataset utilities use the repo-local `dataset/` folder automatically. If the expected dataset files are already present there, they are reused. If Tiny ImageNet is missing, it is downloaded automatically into `dataset/tiny-imagenet-200/`.
+
+Expected layout:
+```text
 SpikingDQN/
 ├── cli.py
 ├── baseline/
 ├── v2/
 └── dataset/
-    └── VOC2012/
-        ├── Annotations/
-        └── JPEGImages/
+    ├── VOC2012/
+    │   ├── Annotations/
+    │   └── JPEGImages/
+    └── tiny-imagenet-200/
+        ├── train/
+        └── val/
 ```
+
+Notes:
+
+- VOC training still uses `torchvision` and expects the standard VOC folder layout under `dataset/`.
+- VOC evaluation uses TFDS VOC2007 test data.
+- Tiny ImageNet training and evaluation use Tiny ImageNet bounding-box annotations from the extracted archive.
+- A legacy Tiny ImageNet checkout under `IMagenet/tiny-imagenet-200/` is still detected as a fallback.
 
 ## Unified CLI
 
@@ -47,9 +60,9 @@ python3 cli.py <baseline|v2> <train|test|render> [options]
 Examples:
 
 ```bash
-python3 cli.py baseline train --target aeroplane --extractor vgg16 --epochs 10
-python3 cli.py v2 train --method surrogate --target aeroplane --epochs 20
-python3 cli.py v2 test --method ats --target mixing --weights weights/ats_mixing.pth
+python3 cli.py baseline train --dataset voc --target aeroplane --extractor vgg16 --epochs 10
+python3 cli.py v2 train --method surrogate --dataset tiny-imagenet --target mixing --epochs 20
+python3 cli.py v2 test --method ats --dataset voc --target mixing --weights weights/ats_mixing.pth
 ```
 
 ## Quick Start (v2 Architecture)
@@ -69,13 +82,13 @@ The training pipeline also supports early stopping (`--early-stop`) and saving t
 
 ```bash
 # Train using Surrogate Gradients to localize aeroplanes (with early stopping and best model saving)
-python3 cli.py v2 train --method surrogate --target aeroplane --epochs 20 --early-stop 5 --save best
+python3 cli.py v2 train --method surrogate --dataset voc --target aeroplane --epochs 20 --early-stop 5 --save best
 
 # Train the ATS model using a VGG16 backbone
-python3 cli.py v2 train --method ats --target mixing --extractor vgg16 --epochs 50
+python3 cli.py v2 train --method ats --dataset voc --target mixing --extractor vgg16 --epochs 50
 
-# Train using Biological STDP (Runs unsupervised pre-training automatically)
-python3 cli.py v2 train --method stdp --target aeroplane
+# Train on Tiny ImageNet
+python3 cli.py v2 train --method surrogate --dataset tiny-imagenet --target mixing --epochs 20
 ```
 
 ### Evaluation & Testing
@@ -84,10 +97,10 @@ Use `cli.py v2 test` to evaluate your saved models. The script calculates Locali
 
 ```bash
 # Evaluate with visual Matplotlib playback of the bounding box search path
-python3 cli.py v2 render --method surrogate --target aeroplane
+python3 cli.py v2 render --method surrogate --dataset voc --target aeroplane
 
 # Evaluate quietly and export granular metrics to a CSV file
-python3 cli.py v2 test --method surrogate --target aeroplane --logging-dir logs
+python3 cli.py v2 test --method surrogate --dataset tiny-imagenet --target mixing --logging-dir logs
 ```
 
 ---

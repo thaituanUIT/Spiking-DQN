@@ -3,7 +3,7 @@ import os
 
 import torch
 
-from v2.data.voc_tfds import TFDSVOC2007TestDataset
+from v2.data.factory import build_eval_dataset, get_default_weight_path
 from v2.agents.localization_agent import LocalizationAgent
 from v2.models.surrogate import SQNSurrogate
 from v2.models.ats import SQNConverted
@@ -17,8 +17,8 @@ def main():
     core_group.add_argument('--method', type=str, choices=['surrogate', 'ats'], required=True, help="SNN method to evaluate: surrogate or ats")
     core_group.add_argument('--extractor', type=str, choices=['conv', 'vgg16', 'resnet18', 'fusion', 'vit', 'efficientnet', 'mobilenet'], default='conv', help="Feature extractor backbone")
     core_group.add_argument('--target', type=str, default='mixing')
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to evaluate")
     core_group.add_argument('--num-samples', type=int, default=10, help="Test on 10 samples by default")
-    core_group.add_argument('--voc-dir', type=str, default=None, help="Override default VOC2012 directory")
     
     # Agent Parameters
     agent_group = parser.add_argument_group('Agent Parameters')
@@ -38,7 +38,11 @@ def main():
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    dataset = TFDSVOC2007TestDataset(target_class=args.target, num_samples=args.num_samples)
+    dataset = build_eval_dataset(
+        dataset_name=args.dataset,
+        target_class=args.target,
+        num_samples=args.num_samples,
+    )
     
     history_dim = 9 * args.replay
     if args.method == 'surrogate':
@@ -50,7 +54,7 @@ def main():
     model = model.to(device)
     
     # Load weights
-    weight_path = args.weights if args.weights else f"weights/{args.method}_{args.target}.pth"
+    weight_path = args.weights if args.weights else get_default_weight_path(args.method, args.dataset, args.target, "weights")
     if os.path.exists(weight_path):
         model.load_state_dict(torch.load(weight_path, map_location=device))
         print(f"Loaded weights from {weight_path}")
@@ -63,7 +67,7 @@ def main():
     # Agent wrapper (optimizer not needed for eval)
     agent = LocalizationAgent(model=model, device=device, history_size=args.replay, max_steps=args.max_steps, replay_device=args.replay_device)
     
-    csv_file = f"test_{args.method}_{args.target}_{args.extractor}.csv"
+    csv_file = f"test_{args.method}_{args.dataset}_{args.target}_{args.extractor}.csv"
     log_dir = args.logging_dir if args.logging_dir else "logs"
     test_model(agent, dataset, log_dir=log_dir, output_file=csv_file)
 

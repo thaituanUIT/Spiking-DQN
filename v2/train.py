@@ -3,7 +3,7 @@ import argparse
 
 import torch
 
-from v2.data.voc import VOCDataset
+from v2.data.factory import build_train_datasets, get_default_weight_path
 from v2.agents.localization_agent import LocalizationAgent
 from v2.models.surrogate import SQNSurrogate
 from v2.models.ats import SQNConverted
@@ -20,9 +20,9 @@ def main():
     core_group.add_argument('--method', type=str, choices=['surrogate', 'ats'], required=True, help="SNN method to use")
     core_group.add_argument('--extractor', type=str, choices=['conv', 'vgg16', 'resnet18', 'fusion', 'vit', 'efficientnet', 'mobilenet'], default='conv', help="Feature extractor backbone")
     core_group.add_argument('--target', type=str, default='mixing', help="Target class or 'mixing' for all")
-    core_group.add_argument('--num-samples', type=int, default=None, help="Number of samples to load from VOC")
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to use")
+    core_group.add_argument('--num-samples', type=int, default=None, help="Number of samples to load from the selected dataset")
     core_group.add_argument('--random', action='store_true', help="Random sample from dataset")
-    core_group.add_argument('--voc-dir', type=str, default=None, help="Override default VOC2012 directory")
     
     # RL/Agent Parameters
     rl_group = parser.add_argument_group('RL/Agent Parameters')
@@ -65,19 +65,17 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    # 1. Load Data
-    voc_dir = args.voc_dir if args.voc_dir else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dataset')
-    
-    val_dataset = None
-    if args.validation != 'none':
-        train_samples = int(args.num_samples * (1 - args.val_ratio)) if args.num_samples else None
-        val_samples = int(args.num_samples * args.val_ratio) if args.num_samples else None
-        
-        dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=train_samples, split='train', use_random=args.random)
-        val_dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=val_samples, split='val', use_random=args.random)
+    dataset, val_dataset = build_train_datasets(
+        dataset_name=args.dataset,
+        target_class=args.target,
+        num_samples=args.num_samples,
+        use_random=args.random,
+        validation_mode=args.validation,
+        val_ratio=args.val_ratio,
+    )
+
+    if val_dataset is not None:
         print(f"Validation enabled. Train samples: {len(dataset)}, Val samples: {len(val_dataset)}")
-    else:
-        dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=args.num_samples, split='train', use_random=args.random)
     
     if len(dataset) == 0:
         print("No valid samples found. Exiting.")
@@ -135,7 +133,7 @@ def main():
     
     # 6. Train RL
     print(f"Starting RL Loop using {args.method} mechanism with {args.algo.upper()}...")
-    save_path = f"weights/{args.method}_{args.target}.pth"
+    save_path = get_default_weight_path(args.method, args.dataset, args.target, "weights")
     losses, epsilons = run_rl_training(
         agent, dataset, epochs=args.epochs, 
         early_stop_patience=args.early_stop,
@@ -148,7 +146,7 @@ def main():
     )
     
     log_dir = args.logging_dir if args.logging_dir else "logs"
-    plot_training_results(losses, epsilons, args.method, args.target, log_dir=log_dir)
+    plot_training_results(losses, epsilons, f"{args.method}_{args.dataset}", args.target, log_dir=log_dir)
     
     # 6. ATS Conversion (if applicable)
     if args.method == 'ats':

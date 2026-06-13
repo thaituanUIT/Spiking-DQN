@@ -37,7 +37,7 @@ To ensure stable and efficient Reinforcement Learning, the `v2` architecture inc
 
 ## Training Usage
 
-Train an agent using the unified `train.py` script. The script automatically handles loading the VOC2012 dataset from the root directory.
+Train an agent using the unified `train.py` script. The script automatically resolves datasets from the repo-local `dataset/` folder.
 
 ### Training Parameters (`train.py`)
 
@@ -46,9 +46,9 @@ Train an agent using the unified `train.py` script. The script automatically han
 | `--method` | string | (required) | SNN method to use: `surrogate` or `ats`. |
 | `--extractor` | string | `conv` | Feature extractor: `conv`, `vgg16`, `resnet18`, `fusion`, `vit`, `efficientnet`, or `mobilenet`. |
 | `--target` | string | `mixing` | Target class (e.g., `aeroplane`) or `mixing` for all classes. |
-| `--num-samples`| int | `None` | Limit the number of samples loaded from VOC2012. |
+| `--dataset` | string | `voc` | Dataset to use: `voc` or `tiny-imagenet`. |
+| `--num-samples`| int | `None` | Limit the number of samples loaded from the selected dataset. |
 | `--random` | flag | `False` | Random sample from dataset. |
-| `--voc-dir` | string | `None` | Override default VOC2012 directory. |
 | `--algo` | string | `dqn` | RL algorithm (`dqn`, `double`, `dueling`). |
 | `--gamma` | float | `0.99` | Discount factor for future rewards. |
 | `--epochs` | int | `10` | Number of RL epochs. |
@@ -75,18 +75,21 @@ Usage Examples:
 
 ```bash
 # Basic Surrogate training isolating the "aeroplane" class
-python v2/train.py --method surrogate --target aeroplane --epochs 20
+python cli.py v2 train -- --method surrogate --dataset voc --target aeroplane --epochs 20
 
 # Surrogate training over the entire mixed dataset using a VGG16 extraction extractor
-python v2/train.py --method surrogate --target mixing --extractor vgg16 --epochs 50
+python cli.py v2 train -- --method surrogate --dataset voc --target mixing --extractor vgg16 --epochs 50
 
-# ATS training with a 15-timestep simulation
-python v2/train.py --method ats --target aeroplane --simulate 15
+# Tiny ImageNet training
+python cli.py v2 train -- --method ats --dataset tiny-imagenet --target mixing --simulate 15
 ```
 
 ## Testing Usage
 
-Test the saved agent policies using `test.py`. Evaluation is now strictly performed on the **VOC2007 test set** using `tensorflow_datasets` (TFDS) to ensure a clean train/test boundary from the VOC2012 training data. Please ensure you have `tensorflow` and `tensorflow_datasets` installed.
+Test the saved agent policies using `test.py`.
+
+- For `--dataset voc`, evaluation uses the **VOC2007 test set** via `tensorflow_datasets` (TFDS).
+- For `--dataset tiny-imagenet`, evaluation uses the Tiny ImageNet validation split.
 
 ### Testing Parameters (`test.py`)
 
@@ -95,7 +98,8 @@ Test the saved agent policies using `test.py`. Evaluation is now strictly perfor
 | `--method` | string | (required) | SNN method to evaluate: `surrogate` or `ats`. |
 | `--extractor` | string | `conv` | Feature extractor: `conv`, `vgg16`, `resnet18`, `fusion`, `vit`, `efficientnet`, or `mobilenet`. |
 | `--target` | string | `mixing` | Target class for evaluation. |
-| `--num-samples`| int | `10` | Number of samples to evaluate on from VOC2007 test. |
+| `--dataset` | string | `voc` | Dataset to evaluate: `voc` or `tiny-imagenet`. |
+| `--num-samples`| int | `10` | Number of samples to evaluate on from the selected dataset. |
 | `--replay` | int | `10` | History size. |
 | `--max-steps` | int | `20` | Max steps per image. |
 | `--simulate` | int | `10` | Number of simulation timesteps for the SNN. |
@@ -106,10 +110,10 @@ Usage Examples:
 
 ```bash
 # Evaluate the Surrogate model on 50 random samples and log results
-python v2/test.py --method surrogate --target mixing --num-samples 50 --random --logging-dir eval_logs
+python cli.py v2 test -- --method surrogate --dataset voc --target mixing --num-samples 50 --logging-dir eval_logs
 
-# Evaluate the ATS model using the VGG16 extractor
-python v2/test.py --method ats --target mixing --extractor vgg16
+# Evaluate the ATS model on Tiny ImageNet
+python cli.py v2 test -- --method ats --dataset tiny-imagenet --target mixing --extractor vgg16
 ```
 
 ## Visualization Usage
@@ -123,9 +127,9 @@ Visualize the agent's search path (Blue bounds -> Red bounds) using the `render.
 | `--method` | string | (required) | SNN method to evaluate: `surrogate` or `ats`. |
 | `--extractor` | string | `conv` | Feature extractor: `conv`, `vgg16`, `resnet18`, `fusion`, `vit`, `efficientnet`, or `mobilenet`. |
 | `--target` | string | `mixing` | Target class for evaluation. |
+| `--dataset` | string | `voc` | Dataset to render from when `--image-path` is not provided. |
 | `--image-path` | string | `None` | Path to specific image file to render. |
 | `--num-images`| int | `5` | Number of images to render if no path provided. |
-| `--voc-dir` | string | `None` | Override default VOC2012 directory. |
 | `--replay` | int | `10` | History size. |
 | `--max-steps` | int | `20` | Max steps per image. |
 | `--simulate` | int | `10` | Number of simulation timesteps for the SNN. |
@@ -137,11 +141,17 @@ Usage Examples:
 
 ```bash
 # Render the Surrogate model search path for 5 images
-python v2/render.py --method surrogate --target aeroplane --num-images 5
+python cli.py v2 render -- --method surrogate --dataset voc --target aeroplane --num-images 5
 
-# Render the ATS model using the VGG16 extractor
-python v2/render.py --method ats --target mixing --extractor vgg16
+# Render the ATS model on Tiny ImageNet
+python cli.py v2 render -- --method ats --dataset tiny-imagenet --target mixing --extractor vgg16
 ```
 
-## Dataset 
-Our dataset is the PASCAL VOC 2012 dataset, which is a collection of images of objects in different categories. Available at: https://drive.google.com/drive/folders/1ikKFR2nbdLw-W6cazaVYyYXCNUeXW6E7?usp=sharing
+## Dataset
+
+Dataset resolution is automatic:
+
+- `dataset/VOC2012/` for VOC
+- `dataset/tiny-imagenet-200/` for Tiny ImageNet
+
+If Tiny ImageNet is missing, the loader downloads and extracts it automatically. If an older checkout exists at `IMagenet/tiny-imagenet-200/`, that path is still supported as a fallback.

@@ -6,10 +6,10 @@ import sys
 # Ensure imports work by adding the root directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from v2.data.voc import VOCDataset
 from baseline.utils.agent import Agent
 from v2.helpers.trainer import run_rl_training
 from v2.helpers.utils import plot_training_results
+from v2.data.factory import build_train_datasets, get_default_weight_path
 
 def main():
     parser = argparse.ArgumentParser(description="Baseline Agent Training with v2 Interface")
@@ -18,9 +18,9 @@ def main():
     core_group = parser.add_argument_group('Core Parameters')
     core_group.add_argument('--target', type=str, default='mixing', help="Target class or 'mixing' for all")
     core_group.add_argument('--extractor', type=str, choices=['vgg16', 'resnet18', 'vit', 'efficientnet', 'mobilenet'], default='vgg16', help="Feature extractor backbone")
-    core_group.add_argument('--num-samples', type=int, default=None, help="Number of samples to load from VOC")
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to use")
+    core_group.add_argument('--num-samples', type=int, default=None, help="Number of samples to load from the selected dataset")
     core_group.add_argument('--random', action='store_true', help="Random sample from dataset")
-    core_group.add_argument('--voc-dir', type=str, default=None, help="Override default VOC2012 directory")
     
     # RL/Agent Parameters
     rl_group = parser.add_argument_group('RL/Agent Parameters')
@@ -50,17 +50,14 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    voc_dir = args.voc_dir if args.voc_dir else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dataset')
-    
-    val_dataset = None
-    if args.validation != 'none':
-        train_samples = int(args.num_samples * (1 - args.val_ratio)) if args.num_samples else None
-        val_samples = int(args.num_samples * args.val_ratio) if args.num_samples else None
-        
-        dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=train_samples, split='train', use_random=args.random)
-        val_dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=val_samples, split='val', use_random=args.random)
-    else:
-        dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=args.num_samples, split='train', use_random=args.random)
+    dataset, val_dataset = build_train_datasets(
+        dataset_name=args.dataset,
+        target_class=args.target,
+        num_samples=args.num_samples,
+        use_random=args.random,
+        validation_mode=args.validation,
+        val_ratio=args.val_ratio,
+    )
         
     if len(dataset) == 0:
         print("No valid samples found. Exiting.")
@@ -79,7 +76,10 @@ def main():
     )
     
     os.makedirs('baseline/weights', exist_ok=True)
-    save_path = f"baseline/weights/baseline_{args.extractor}_{args.target}_ep{args.epochs}_bs{args.batch_size}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}.pth"
+    default_prefix = f"baseline_{args.extractor}"
+    base_weight_path = get_default_weight_path(default_prefix, args.dataset, args.target, "baseline/weights")
+    save_root, save_ext = os.path.splitext(base_weight_path)
+    save_path = f"{save_root}_ep{args.epochs}_bs{args.batch_size}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}{save_ext}"
     print(f"Starting Baseline RL Loop for target {args.target}...")
     
     losses, epsilons = run_rl_training(
@@ -96,7 +96,7 @@ def main():
     import datetime
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = args.logging_dir if args.logging_dir else "logs"
-    method_name = f"train_baseline_{args.extractor}_ep{args.epochs}_bs{args.batch_size}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}_{timestamp}"
+    method_name = f"train_baseline_{args.extractor}_{args.dataset}_ep{args.epochs}_bs{args.batch_size}_step{args.max_steps}_a{args.alpha}_nu{args.nu}_th{args.threshold}_{timestamp}"
     plot_training_results(losses, epsilons, method_name, args.target, log_dir=log_dir)
     
     if args.save == "last":
@@ -104,7 +104,7 @@ def main():
         print(f"Final model saved to {save_path}")
         
         # Also save a simpler path for easier testing
-        simple_path = f"baseline/weights/baseline_{args.extractor}_{args.target}.pth"
+        simple_path = get_default_weight_path(default_prefix, args.dataset, args.target, "baseline/weights")
         torch.save(agent.model.state_dict(), simple_path)
         print(f"Convenience copy saved to {simple_path}")
     elif args.save == "best":

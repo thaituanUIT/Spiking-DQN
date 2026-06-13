@@ -8,9 +8,9 @@ import numpy as np
 # Ensure imports work by adding the root directory to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from v2.data.voc import VOCDataset
 from baseline.utils.agent import Agent
 from v2.helpers.renderer import render_predictions
+from v2.data.factory import build_eval_dataset, get_default_weight_path
 
 def main():
     parser = argparse.ArgumentParser(description="Baseline Agent Rendering with v2 Interface")
@@ -18,10 +18,10 @@ def main():
     # Core Parameters
     core_group = parser.add_argument_group('Core Parameters')
     core_group.add_argument('--target', type=str, default='mixing', help="Target class or 'mixing' for all")
+    core_group.add_argument('--dataset', type=str, choices=['voc', 'tiny-imagenet'], default='voc', help="Dataset to render from when --image-path is not provided")
     core_group.add_argument('--image-path', type=str, default=None, help="Path to specific image file")
     core_group.add_argument('--num-images', type=int, default=5, help="Number of images if no path provided")
     core_group.add_argument('--extractor', type=str, choices=['vgg16', 'resnet18', 'vit', 'efficientnet', 'mobilenet'], default='vgg16', help="Feature extractor backbone")
-    core_group.add_argument('--voc-dir', type=str, default=None, help="Override default VOC2012 directory")
     
     # Agent Parameters
     agent_group = parser.add_argument_group('Agent Parameters')
@@ -57,8 +57,11 @@ def main():
             'filename': os.path.basename(args.image_path)
         }]
     else:
-        voc_dir = args.voc_dir if args.voc_dir else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dataset')
-        dataset = VOCDataset(root_dir=voc_dir, target_class=args.target, num_samples=args.num_images)
+        dataset = build_eval_dataset(
+            dataset_name=args.dataset,
+            target_class=args.target,
+            num_samples=args.num_images,
+        )
         samples = [dataset[i] for i in range(len(dataset))]
         
     agent = Agent(
@@ -73,7 +76,8 @@ def main():
     )
     
     # Load weights
-    weight_path = args.weights if args.weights else f"baseline/weights/baseline_{args.extractor}_{args.target}.pth"
+    weight_prefix = f"baseline_{args.extractor}"
+    weight_path = args.weights if args.weights else get_default_weight_path(weight_prefix, args.dataset, args.target, "baseline/weights")
     if os.path.exists(weight_path):
         agent.model.load_state_dict(torch.load(weight_path, map_location=device))
         print(f"Loaded weights from {weight_path}")
