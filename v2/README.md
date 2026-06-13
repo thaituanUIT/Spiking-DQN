@@ -15,7 +15,17 @@ The reinforcement learning environment frames object localization as a Markov De
 8. Decrease Horizontal Aspect Ratio (Taller)
 9. **Trigger/Terminate** (Indicates the object is found)
 
-The agent receives a positive reward (+1) if the Intersection Over Union (IoU) with the ground truth improves. To prevent "lazy" premature terminations, the trigger action grants a proportional termination bonus (`nu * iou`, e.g. up to +3.0) if it halts with an IoU > 0.5, heavily incentivizing the agent to perfectly frame the object.
+The reward function is threshold-gated and integer-based:
+
+* **Transform actions (0-7)**:
+  * `+1` if the new box improves IoU **and** the new IoU is at least `--threshold`
+  * `0` if the new box improves IoU but remains below `--threshold`
+  * `-1` otherwise
+* **Trigger/Terminate action (8)**:
+  * if `IoU >= threshold`, reward = `floor(nu * iou^2 * 10)`
+  * otherwise, reward = `-int(nu)`
+
+This means small improvements below the threshold are not positively rewarded, while high-IoU terminations receive a much larger bonus. With the default `nu=3.0`, terminating at IoU `0.7` yields `14`, and terminating below threshold yields `-3`.
 
 ## Available Methods
 
@@ -32,7 +42,7 @@ To ensure stable and efficient Reinforcement Learning, the `v2` architecture inc
 
 * **Deep Backbone Support & GAP Stabilization**: Researchers can inject frozen deep backbones (`vgg16`, `resnet18`, `efficientnet`, etc.). A **Global Average Pooling (GAP)** layer compresses massive feature outputs (e.g., 25,088 features) down to a highly stable 512 dimensions, preventing catastrophic forgetting and the "Epoch 1 Cliff".
 * **Replay Buffer Feature Caching**: Instead of storing massive 3D image arrays in memory, the environment step pre-extracts the 1D feature tensors using the frozen backbone. The replay buffer strictly stores these lightweight vectors, bypassing the backbone entirely during DQN backpropagation. This drastically reduces VRAM usage and accelerates training time.
-* **Guided Exploration**: The standard epsilon-greedy policy is augmented with a positive-reward lookahead. During random exploration, the agent strategically prioritizes actions that guarantee an immediate positive reward (IoU improvement), avoiding destructive bounding box transformations and massively speeding up early convergence.
+* **Guided Exploration**: The standard epsilon-greedy policy is augmented with a reward lookahead. During random exploration, the agent evaluates immediate rewards for all actions and prefers the best action whenever the maximum immediate reward is non-negative, avoiding clearly destructive bounding box transformations and speeding up early convergence.
 * **Deep Spiking RL Head**: The fully connected decision network has been expanded into a robust 6-layer deep sequence (`5096 -> 2048 -> 1024 -> 512 -> 128 -> 64 -> output`). In the `surrogate` method, these layers are systematically partitioned across the temporal spiking loop to maintain biological plausibility while processing highly complex spatial abstractions.
 
 ## Training Usage
